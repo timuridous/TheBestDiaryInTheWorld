@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
 
-from models.habit_data import HABITS, HabitState, WeekInfo
+from models.habit_data import Goal, HabitState, WeekInfo
 
 
 class HabitTable(QTableWidget):
@@ -17,17 +17,19 @@ class HabitTable(QTableWidget):
         self,
         week: WeekInfo,
         state: HabitState,
-        on_toggle: Callable[[date, str, bool], None],
+        goals: List[Goal],
+        on_changed: Callable[[], None],
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._week = week
         self._state = state
-        self._on_toggle = on_toggle
+        self._goals = goals
+        self._on_changed = on_changed
 
         self._current_day = date.today()
 
-        self.setRowCount(len(HABITS))
+        self.setRowCount(len(self._goals))
         # 1 column for "Habits" + 7 for days
         self.setColumnCount(1 + len(self._week.days))
         self.setAlternatingRowColors(True)
@@ -49,6 +51,11 @@ class HabitTable(QTableWidget):
         self._populate_headers()
         self.refresh()
 
+    def set_goals(self, goals: List[Goal]) -> None:
+        self._goals = goals
+        self.setRowCount(len(self._goals))
+        self.refresh()
+
     def refresh(self) -> None:
         self.blockSignals(True)
         try:
@@ -65,8 +72,8 @@ class HabitTable(QTableWidget):
         self.setHorizontalHeaderItem(0, habits_header)
 
         for idx, day in enumerate(self._week.days, start=1):
-            text = f"{day.strftime('%a')}\n{day.strftime('%b %-d') if hasattr(day, 'strftime') else ''}"
-            # On Windows, %-d may not be supported; fall back gracefully.
+            # On Windows, %-d (no-leading-zero day) may not be supported;
+            # fall back to %d and strip a leading zero manually.
             try:
                 date_str = day.strftime("%b %-d")
             except ValueError:
@@ -78,21 +85,30 @@ class HabitTable(QTableWidget):
             self.setHorizontalHeaderItem(idx, header)
 
     def _populate_body(self) -> None:
-        for row, habit in enumerate(HABITS):
-            habit_item = QTableWidgetItem(habit)
+        for row, goal in enumerate(self._goals):
+            habit_item = QTableWidgetItem(goal.name)
             habit_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.setItem(row, 0, habit_item)
 
             for col, day in enumerate(self._week.days, start=1):
                 item = QTableWidgetItem()
-                item.setFlags(
-                    Qt.ItemFlag.ItemIsUserCheckable
-                    | Qt.ItemFlag.ItemIsEnabled
-                )
-                checked = self._state.is_checked(day, habit)
-                item.setCheckState(
-                    Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-                )
+                if goal.kind == "check":
+                    item.setFlags(
+                        Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsEnabled
+                    )
+                    checked = self._state.is_checked(day, goal.name)
+                    item.setCheckState(
+                        Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+                    )
+                else:  # numeric goal
+                    item.setFlags(
+                        Qt.ItemFlag.ItemIsEnabled
+                        | Qt.ItemFlag.ItemIsEditable
+                    )
+                    value = self._state.get_number(day, goal.name)
+                    item.setText("" if value is None else str(value))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.setItem(row, col, item)
 
     def _highlight_current_day(self) -> None:
@@ -111,7 +127,9 @@ class HabitTable(QTableWidget):
     def _handle_cell_changed(self, row: int, column: int) -> None:
         if column == 0:
             return
-        habit = HABITS[row]
+        if not (0 <= row < len(self._goals)):
+            return
+        goal = self._goals[row]
         day_index = column - 1
         if not (0 <= day_index < len(self._week.days)):
             return
@@ -120,6 +138,24 @@ class HabitTable(QTableWidget):
         if item is None:
             return
 
-        checked = item.checkState() == Qt.CheckState.Checked
-        self._on_toggle(day, habit, checked)
+        if goal.kind == "check":
+            checked = item.checkState() == Qt.CheckState.Checked
+            self._state.set_checked(day, goal.name, checked)
+        else:
+            text = item.text().input()
+            if text == "":
+                self._state.set_number(day, goal.name, None)
+            else:
+                try:
+                    number = float(text)
+                except ValueError:
+                    # Reset invalid input
+                    self.blockSignals(True)
+                    item.setText("")
+                    self.blockSignals(False)
+                    self._state.set_number(day, goal.name, None)
+                else:
+                    self._state.set_number(day, goal.name, number)
+
+        self._on_changed()
 
