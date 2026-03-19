@@ -33,8 +33,14 @@ class HabitTable(QTableWidget):
         # 1 column for "Habits" + 7 for days
         self.setColumnCount(1 + len(self._week.days))
         self.setAlternatingRowColors(True)
-        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        # Enable editing so numeric cells can receive typed input.
+        # Checkbox cells remain non-editable (only checkable), so this doesn't affect them.
+        self.setEditTriggers(
+            QTableWidget.EditTrigger.SelectedClicked
+            | QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
+        self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.horizontalHeader().setStretchLastSection(True)
         self.verticalHeader().setVisible(False)
 
@@ -142,7 +148,8 @@ class HabitTable(QTableWidget):
             checked = item.checkState() == Qt.CheckState.Checked
             self._state.set_checked(day, goal.name, checked)
         else:
-            text = item.text().input()
+            # item.text() is already a string; parse it as number.
+            text = item.text().strip()
             if text == "":
                 self._state.set_number(day, goal.name, None)
             else:
